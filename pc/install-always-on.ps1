@@ -59,8 +59,13 @@ if ($Remove) {
 
 if (-not (Test-Path $Watchdog)) { throw "Missing watchdog script: $Watchdog" }
 
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-    -Argument ("-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"{0}`" -Port {1}" -f $Watchdog, $Port)
+$QuietWatchdog = Join-Path (Split-Path -Parent $PSCommandPath) 'hermes-watchdog-hidden.vbs'
+$QuietHost = Join-Path $env:WINDIR 'System32\wscript.exe'
+if (-not (Test-Path $QuietWatchdog)) { throw "Missing quiet watchdog: $QuietWatchdog" }
+if (-not (Test-Path $QuietHost)) { throw "Missing Windows Script Host: $QuietHost" }
+$action = New-ScheduledTaskAction -Execute $QuietHost `
+    -Argument ('//B //Nologo "{0}" {1}' -f $QuietWatchdog, $Port) `
+    -WorkingDirectory (Split-Path -Parent $PSCommandPath)
 
 # Boot covers "PC restarted"; logon covers "task was somehow not running";
 # the repetition covers "dashboard died at 3am".
@@ -90,11 +95,32 @@ if ($RunAsUser) {
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
     Write-Step "Principal: $env:USERNAME (interactive) - runs only while you are logged in"
 } else {
+    # SYSTEM starts before login and survives logout - but the dashboard shares
+    # HERMES_HOME (D:\.hermes) with the desktop app, which runs as YOU. A SYSTEM
+    # dashboard can therefore take ownership of state.db / session files the
+    # desktop client then fails to write. If you hit that, re-run with -RunAsUser
+    # and add a boot trigger under an S4U principal (runs as you, no stored
+    # password) instead of falling back to an interactive-only task.
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     Write-Step "Principal: SYSTEM - starts before login and survives logout"
+    Write-Step "NOTE: shares D:\.hermes with your desktop Hermes; see the comment here if file ownership bites."
 }
 
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+
+# The deployed task has historically been registered under a DIFFERENT name
+# ('Hermes Always On (user)'), issued by an earlier revision. Leaving it in place
+# while adding this one puts TWO watchdogs against port 9119, and they can both
+# decide the port is free and spawn a dashboard - the "half-dead dashboard holding
+# the port" failure. Remove any legacy name in the same run.
+foreach ($legacy in @('Hermes Always On (user)')) {
+    $old = Get-ScheduledTask -TaskName $legacy -ErrorAction SilentlyContinue
+    if ($old) {
+        Unregister-ScheduledTask -TaskName $legacy -Confirm:$false -ErrorAction SilentlyContinue
+        Write-Step "Removed legacy task '$legacy' (would have raced this one for port $Port)."
+    }
+}
+
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
     -Settings $settings -Principal $principal `
     -Description 'Keeps the Hermes dashboard answering on the LAN so the phone app can always reach it.' | Out-Null

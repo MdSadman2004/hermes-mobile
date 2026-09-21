@@ -25,6 +25,7 @@
 #>
 param(
     [int]$Port = 9119,
+    [switch]$NoReclaim,
     [switch]$Verbose
 )
 
@@ -142,6 +143,11 @@ if ($alive) {
 # that this script launches, so an unrelated python service is never touched.
 $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if ($busy) {
+    if ($NoReclaim) {
+        Write-Log "Port $Port is occupied but health probe failed; non-disruptive mode leaves every live process untouched."
+        Set-State 'needs-attention-port-busy' | Out-Null
+        exit 1
+    }
     $squatterPid = [int]$busy[0].OwningProcess
     $squatter = Get-Process -Id $squatterPid -ErrorAction SilentlyContinue
     $isOurs = $false
