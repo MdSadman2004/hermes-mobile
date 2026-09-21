@@ -61,31 +61,10 @@ def status(host: str, port: int = PORT, timeout: float = 4.0):
         return None
 
 
-def lan_ip() -> str:
-    """The address the phone dials. Never 127.0.0.1 - that is unreachable off-box."""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))          # no packet sent; just picks the route
-        ip = s.getsockname()[0]
-        s.close()
-        if not ip.startswith("127."):
-            return ip
-    except Exception:
-        pass
-    for _, _, _, _, sa in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-        if not sa[0].startswith("127."):
-            return sa[0]
-    return "127.0.0.1"
-
-
-def tailscale_ip() -> str:
-    try:
-        for _, _, _, _, sa in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            if sa[0].startswith("100."):
-                return sa[0]
-    except Exception:
-        pass
-    return ""
+# Address resolution lives in netinfo.py, so this file, qr_server.py and the
+# PowerShell scripts cannot drift apart again. A local copy here previously
+# tested `startswith("100.")`, which matched non-tailnet addresses too.
+from netinfo import is_tailnet as _is_tailnet, lan_ip, tailscale_ip  # noqa: E402
 
 
 def credential_ok(pw: str) -> bool:
@@ -143,8 +122,15 @@ def start() -> bool:
 def show_qr(st: dict) -> None:
     pw = PWFILE.read_text(encoding="utf-8").strip() if PWFILE.exists() else ""
     user = username()
-    host = lan_ip()
+    lan = lan_ip()
     ts = tailscale_ip()
+    # Prefer the TAILNET address. It answers on home Wi-Fi AND on mobile data,
+    # and never changes; a LAN IP is a DHCP lease and moves (this PC has been
+    # seen on 10.103.133.152, 10.55.187.243 and 192.168.1.108 in one day).
+    # Pairing to a LAN address is exactly what makes the phone work at home
+    # and fail everywhere else.
+    host = ts or lan
+    away_ok = bool(ts)
 
     if st.get("auth_required"):
         if not pw:
@@ -165,9 +151,15 @@ def show_qr(st: dict) -> None:
 
     print()
     print(f"  Dashboard : http://localhost:{PORT}")
-    print(f"  LAN       : http://{host}:{PORT}   <- the phone uses this")
-    if ts:
+    if away_ok:
+        print(f"  Pair host : http://{host}:{PORT}   <- TAILNET: works anywhere, never changes")
+        print(f"  LAN       : http://{lan}:{PORT}   (home only - DHCP, do not pair to this)")
         print(f"  Tailscale : http://{ts}:{PORT}   <- away from home")
+    else:
+        print(f"  Pair host : http://{host}:{PORT}   <- LAN ONLY - unreachable off this Wi-Fi")
+        print("  WARNING   : Tailscale is not up on this PC, so the QR cannot work away")
+        print("              from home. Fix, then re-run:")
+        print("                powershell -ExecutionPolicy Bypass -File D:\\HermesMobile\\pc\\internet-access.ps1")
     print(f"  Login     : {user} / {pw}")
     print(f"  Hermes    : v{st.get('version')}  gateway={st.get('gateway_state')}")
     print()

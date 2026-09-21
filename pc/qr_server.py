@@ -53,27 +53,10 @@ def dashboard_status():
         return None
 
 
-def tailscale_ip() -> str:
-    try:
-        for *_, sa in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            if sa[0].startswith("100."):
-                return sa[0]
-    except Exception:
-        pass
-    return ""
-
-
-def lan_ip() -> str:
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        if not ip.startswith("127."):
-            return ip
-    except Exception:
-        pass
-    return "127.0.0.1"
+# Shared with hermes-dashboard.py. The local copy here used bare
+# `startswith("100.")`, which is not the tailnet range - it would happily emit
+# 100.200.x.x as the pairing host and the phone could never reach it.
+from netinfo import is_tailnet, lan_ip, tailscale_ip  # noqa: E402
 
 
 def credential_ok(pw: str) -> bool:

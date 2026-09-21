@@ -33,3 +33,8 @@ build_log.txt
 build-debug.log
 winget_install.log
 tailscale.apk
+
+# Pairing QR images encode the dashboard password in plaintext. Generated on
+# demand by pc/make_pair_qr.py; must never enter git history.
+pc/pair-qr.png
+pc/*-qr.png
