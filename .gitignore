@@ -6,6 +6,10 @@ build/
 *.aab
 *.log
 
+# Python bytecode (pc/ scripts import netinfo.py, which creates this)
+__pycache__/
+*.pyc
+
 # Local config
 local.properties
 
