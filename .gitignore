@@ -42,3 +42,6 @@ tailscale.apk
 # demand by pc/make_pair_qr.py; must never enter git history.
 pc/pair-qr.png
 pc/*-qr.png
+
+# foundry chat-sync runtime leftovers
+pc/foundry-sync.log

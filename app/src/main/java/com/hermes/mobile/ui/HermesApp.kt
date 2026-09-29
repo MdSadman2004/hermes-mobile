@@ -265,7 +265,9 @@ private fun CockpitTitle(cockpitVm: CockpitViewModel, fallback: String) {
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.padding(end = 8.dp)) { ConnectionPill(conn, compact = true) }
+        // Non-compact on purpose: the label answers "which system am I on?" —
+        // 'foundry' or 'Hermes PC' — and it tracks the connection state.
+        Box(Modifier.padding(end = 8.dp)) { ConnectionPill(conn, compact = false) }
         Text(
             title,
             style = MaterialTheme.typography.titleSmall,

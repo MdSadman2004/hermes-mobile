@@ -34,6 +34,8 @@ class SessionRepository @Inject constructor(
     private suspend fun client(): HermesClient =
         connectionManager.clientFlow.first { it != null }!!
 
+    data class ResumedSession(val liveId: String, val storedId: String)
+
     /** session.list → typed summaries; refreshes the Room cache. */
     suspend fun listSessions(): List<SessionSummary> {
         val result = client().sessionList() ?: return emptyList()
@@ -61,7 +63,7 @@ class SessionRepository @Inject constructor(
     }
 
     /** session.resume (stored id) → live handle. Server returns the new handle. */
-    suspend fun resumeSession(storedId: String): String {
+    suspend fun resumeSession(storedId: String): ResumedSession {
         val result = client().rpc.call(
             "session.resume",
             rpcParamsOf(
@@ -70,9 +72,13 @@ class SessionRepository @Inject constructor(
             ),
         )
         val o = result.obj()
-        return o.str("session_id")
+        val liveId = o.str("session_id")
             ?: o.objAt("info").str("session_id")
-            ?: storedId // fall back: some paths echo the target
+            ?: error("session.resume returned no live session_id for $storedId")
+        return ResumedSession(
+            liveId = liveId,
+            storedId = o.str("session_key") ?: o.str("resumed") ?: storedId,
+        )
     }
 
     // ------------------------------------------------------------ mutations

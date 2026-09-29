@@ -90,6 +90,13 @@ class TranscriptRepository @Inject constructor() {
         private var seq = 0L
         private fun nextKey(prefix: String) = "$prefix-${seq++}"
 
+        // A session can be active when the phone attaches. Keep frames received
+        // while history is being rebuilt; starting hydration in a second,
+        // unrelated coroutine used to race the event collector and lose the
+        // first deltas of a live desktop turn.
+        private var hydrating = true
+        private val pendingEvents = ArrayDeque<HermesEvent>()
+
         /**
          * Approval cards are keyed by an incrementing ordinal, not by a hash of
          * the command. Hashing meant a second, identical approval request in
@@ -104,7 +111,13 @@ class TranscriptRepository @Inject constructor() {
             eventJob = scope.launch(Dispatchers.Default) {
                 client.rpc.events.collect { event ->
                     if (event.sessionId.isNotEmpty() && event.sessionId != sessionId) return@collect
-                    handle(event)
+                    val queued = lock.withLock {
+                        if (hydrating) {
+                            pendingEvents.addLast(event)
+                            true
+                        } else false
+                    }
+                    if (!queued) handle(event)
                 }
             }
             flushJob = scope.launch(Dispatchers.Default) {
@@ -118,6 +131,13 @@ class TranscriptRepository @Inject constructor() {
             }
             scope.launch {
                 hydrateFromHistory()
+                val queued = lock.withLock {
+                    hydrating = false
+                    buildList {
+                        while (pendingEvents.isNotEmpty()) add(pendingEvents.removeFirst())
+                    }
+                }
+                queued.forEach { handle(it) }
                 replayPendingApproval()
             }
         }

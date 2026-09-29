@@ -61,6 +61,10 @@ data class ChatAttachment(
     val downloading: Boolean = false,
     val progress: Float = 0f,
     val error: String? = null,
+    /** True when the agent delivered this via a MEDIA: marker — auto-save to the phone. */
+    val autoDownload: Boolean = false,
+    /** Set once the file has been saved to the phone's Downloads, so it is not saved twice. */
+    val downloadedToPhone: Boolean = false,
 ) {
     val kind: AttachmentKind
         get() = when {

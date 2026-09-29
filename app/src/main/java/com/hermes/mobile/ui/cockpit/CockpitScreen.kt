@@ -15,6 +15,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,6 +73,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -132,16 +134,32 @@ fun CockpitScreen(
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
 
-    // Auto-follow the stream only while the user is already at the bottom;
-    // yanking the viewport away from something they scrolled back to read is
-    // the fastest way to make a streaming transcript unusable.
-    val pinnedToBottom by remember {
-        derivedStateOf { !listState.canScrollForward }
-    }
-    LaunchedEffect(items.size, (items.lastOrNull() as? TranscriptItem.AssistantMessage)?.text?.length) {
-        if (items.isNotEmpty() && pinnedToBottom) {
-            listState.animateScrollToItem(items.size - 1)
+    // Follow the stream unless the user DELIBERATELY scrolled away. A bare
+    // `!canScrollForward` check un-pinned on every streamed line — content
+    // grows faster than the follow lands — so the transcript quietly stopped
+    // auto-scrolling mid-turn. Only a real drag breaks the follow now, and
+    // returning to the bottom restores it.
+    var followStream by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) followStream = false
         }
+    }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.canScrollForward }.collect { canForward ->
+            if (!canForward) followStream = true
+        }
+    }
+
+    // A new row animates into place; text GROWING inside the streaming row
+    // follows instantly. Animating on every delta queued one scroll animation
+    // per tick, and the overlapping tweens read as stutter.
+    val streamingLength = (items.lastOrNull() as? TranscriptItem.AssistantMessage)
+        ?.takeIf { it.streaming }?.text?.length ?: 0
+    LaunchedEffect(items.size, streamingLength) {
+        if (items.isEmpty() || !followStream) return@LaunchedEffect
+        if (streamingLength > 0) listState.scrollToItem(items.lastIndex)
+        else listState.animateScrollToItem(items.lastIndex)
     }
     LaunchedEffect(phase) {
         if (phase == TurnPhase.RUNNING) {
@@ -169,6 +187,11 @@ fun CockpitScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(items, key = { it.key }) { item ->
+                        // New rows fade/slide in via animateItem; placement
+                        // changes animate too. Streaming growth inside a row
+                        // changes its size, not its position, so it never
+                        // re-triggers the entry animation.
+                        Box(Modifier.fillMaxWidth().animateItem()) {
                         when (item) {
                             is TranscriptItem.UserMessage -> Column(
                                 horizontalAlignment = Alignment.End,
@@ -213,6 +236,7 @@ fun CockpitScreen(
                                 onNeedsFetch = vm::materialize,
                             )
                         }
+                        }
                     }
                 }
             }
@@ -220,6 +244,27 @@ fun CockpitScreen(
             // What the PC is doing right now, in one changing line. This is
             // what replaced the inline terminal spam.
             ActivityStrip(activity = activity, onOpenActivity = onOpenActivity)
+
+            // Save/Open attachments when the user taps the buttons on their cards.
+            LaunchedEffect(Unit) {
+                vm.attachmentSaves.collect { att ->
+                    vm.saveAttachmentToPhone(att)
+                }
+            }
+            LaunchedEffect(Unit) {
+                vm.attachmentOpens.collect { att -> vm.openAttachment(att) }
+            }
+
+            // Auto-download files the agent delivered via MEDIA: — the user said
+            // "send me the deck", and they said it on the phone, so the file should
+            // just appear in Downloads without tapping every card.
+            LaunchedEffect(items.size) {
+                items.filterIsInstance<TranscriptItem.AssistantMessage>()
+                    .lastOrNull()
+                    ?.attachments
+                    ?.filter { it.autoDownload && it.remotePath != null && !it.downloading && !it.downloadedToPhone }
+                    ?.forEach { vm.saveAttachmentToPhone(it) }
+            }
 
             AnimatedVisibility(
                 visible = phase == TurnPhase.RUNNING,
@@ -244,7 +289,7 @@ fun CockpitScreen(
 
         // Jump-to-latest, shown only when the user has scrolled away from it.
         AnimatedVisibility(
-            visible = items.isNotEmpty() && !pinnedToBottom,
+            visible = items.isNotEmpty() && !followStream,
             enter = fadeIn(tween(150)),
             exit = fadeOut(tween(150)),
             modifier = Modifier.align(Alignment.BottomEnd).padding(end = 20.dp, bottom = 96.dp),
@@ -776,8 +821,7 @@ private fun Composer(
                 // the whole reason to start long work from a phone. Kept as a
                 // long-press rather than a second button so the common case
                 // stays a one-thumb tap.
-                FloatingActionButton(
-                    onClick = {},
+                Surface(
                     modifier = Modifier
                         .size(48.dp)
                         .combinedClickable(
@@ -800,13 +844,13 @@ private fun Composer(
                             contentDescription =
                                 "Send to Hermes. Long-press to run it detached on your PC."
                         },
-                    containerColor = if (canSend) MaterialTheme.colorScheme.primary
+                    color = if (canSend) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.surfaceContainerHighest,
                     contentColor = if (canSend) MaterialTheme.colorScheme.onPrimary
                     else MaterialTheme.colorScheme.onSurfaceVariant,
-                    elevation = androidx.compose.material3.FloatingActionButtonDefaults
-                        .elevation(0.dp, 0.dp, 0.dp, 0.dp),
+                    shape = RoundedCornerShape(16.dp),
                 ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     // While attachments stage, the button reports it rather
                     // than looking dead — a multi-megabyte upload is seconds
                     // of silence otherwise, and silence reads as "it ignored me".
@@ -822,6 +866,7 @@ private fun Composer(
                             contentDescription = null,
                             Modifier.size(20.dp),
                         )
+                    }
                     }
                 }
             }

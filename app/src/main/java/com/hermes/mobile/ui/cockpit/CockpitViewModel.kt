@@ -10,6 +10,7 @@ import com.hermes.mobile.data.repo.AttachmentRepository
 import com.hermes.mobile.data.repo.CommandRepository
 import com.hermes.mobile.data.repo.OutboxRepository
 import com.hermes.mobile.data.repo.TransferRepository
+import com.hermes.mobile.data.repo.firstDbl
 import com.hermes.mobile.data.repo.firstStr
 import com.hermes.mobile.data.repo.obj
 import com.hermes.mobile.data.repo.objects
@@ -31,6 +32,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -90,6 +93,8 @@ class CockpitViewModel @Inject constructor(
 
     /** The stored id the open session came from — session.delete needs it, not the live handle. */
     private var storedSessionId: String? = null
+    private var bindingJob: Job? = null
+    private var reconnectJob: Job? = null
 
     val hasSession: Boolean get() = liveSessionId != null
 
@@ -120,7 +125,30 @@ class CockpitViewModel @Inject constructor(
                 if (sid == null) {
                     adoptMostRecent()
                 } else if (engine?.isBoundTo(client) == false) {
-                    openLiveSession(sid, _activeTitle.value, storedSessionId)
+                    // A reconnect may cross a gateway restart. The live handle is
+                    // process-local, so resolve it through the stable stored key
+                    // whenever one exists instead of blindly reusing a stale id.
+                    val storedId = storedSessionId
+                    if (storedId != null) {
+                        reconnectJob?.cancel()
+                        reconnectJob = viewModelScope.launch {
+                            runCatching { sessionRepository.resumeSession(storedId) }
+                                .onSuccess { resumed ->
+                                    if (connectionManager.clientFlow.value === client &&
+                                        storedSessionId == storedId
+                                    ) {
+                                        openLiveSession(resumed.liveId, _activeTitle.value, resumed.storedId)
+                                    }
+                                }
+                                .onFailure {
+                                    if (isActive) {
+                                        _userMessage.emit("Couldn't reconnect this conversation: ${it.message}")
+                                    }
+                                }
+                        }
+                    } else {
+                        openLiveSession(sid, _activeTitle.value, null)
+                    }
                 }
             }
         }
@@ -136,6 +164,7 @@ class CockpitViewModel @Inject constructor(
             _userMessage.tryEmit("Not connected to your PC")
             return
         }
+        bindingJob?.cancel()
         engine?.stop()
         liveSessionId = sessionId
         storedSessionId = storedId ?: storedSessionId
@@ -144,13 +173,35 @@ class CockpitViewModel @Inject constructor(
         _toolLog.value = emptyList()
         _activity.value = null
         _usage.value = null
-        engine = transcriptRepository.attach(client, sessionId, viewModelScope).also { e ->
-            viewModelScope.launch { e.items.collect { _items.value = it } }
-            viewModelScope.launch { e.turnPhase.collect { _turnPhase.value = it } }
-            viewModelScope.launch { e.activity.collect { _activity.value = it } }
-            viewModelScope.launch { e.toolLog.collect { _toolLog.value = it } }
-            viewModelScope.launch { e.contextPercent.collect { _contextPercent.value = it } }
-            viewModelScope.launch { e.model.collect { if (it != null) _model.value = it } }
+        bindingJob = viewModelScope.launch {
+            // Keep the engine and every UI collector under the same cancellable
+            // binding job. Reconnects replace this job; no old engine can keep
+            // publishing rows into the newly attached cockpit.
+            kotlinx.coroutines.coroutineScope {
+                engine = transcriptRepository.attach(client, sessionId, this@coroutineScope)
+                val attached = engine ?: return@coroutineScope
+                // Start listening before activation. The gateway may emit the
+                // live snapshot immediately; activating first left a narrow
+                // gap where those frames were dropped by SharedFlow.
+                val activationError = runCatching { client.sessionActivate(sessionId) }.exceptionOrNull()
+                if (activationError != null) {
+                    attached.stop()
+                    engine = null
+                    _userMessage.emit("Couldn't attach to live session: ${activationError.message}")
+                    return@coroutineScope
+                }
+                if (liveSessionId != sessionId || connectionManager.clientFlow.value !== client) {
+                    attached.stop()
+                    engine = null
+                    return@coroutineScope
+                }
+                launch { attached.items.collect { _items.value = it } }
+                launch { attached.turnPhase.collect { _turnPhase.value = it } }
+                launch { attached.activity.collect { _activity.value = it } }
+                launch { attached.toolLog.collect { _toolLog.value = it } }
+                launch { attached.contextPercent.collect { _contextPercent.value = it } }
+                launch { attached.model.collect { if (it != null) _model.value = it } }
+            }
         }
     }
 
@@ -171,8 +222,8 @@ class CockpitViewModel @Inject constructor(
     fun resumeAndOpen(storedId: String, title: String) {
         viewModelScope.launch {
             try {
-                val live = sessionRepository.resumeSession(storedId)
-                openLiveSession(live, title.ifBlank { "Session" }, storedId = storedId)
+                val resumed = sessionRepository.resumeSession(storedId)
+                openLiveSession(resumed.liveId, title.ifBlank { "Session" }, storedId = resumed.storedId)
             } catch (e: Exception) {
                 _userMessage.emit("Couldn't resume: ${e.message}")
             }
@@ -197,9 +248,13 @@ class CockpitViewModel @Inject constructor(
     private suspend fun adoptMostRecent() {
         val client = connectionManager.clientFlow.value ?: return
         val active = runCatching { client.sessionActiveList() }.getOrNull().obj() ?: return
-        val first = active.objects("sessions").firstOrNull() ?: return
-        val sid = first.firstStr("session_id", "id") ?: return
-        openLiveSession(sid, first.str("title") ?: "Live session")
+        val rows = active.objects("sessions")
+        val live = rows.mapNotNull { row ->
+            val sid = row.firstStr("session_id", "id") ?: return@mapNotNull null
+            sid to (row.firstDbl("last_active", "started_at") ?: 0.0)
+        }.maxByOrNull { it.second } ?: return
+        val row = rows.firstOrNull { it.firstStr("session_id", "id") == live.first } ?: return
+        openLiveSession(live.first, row.str("title") ?: "Live session", row.firstStr("session_key", "stored_session_id"))
     }
 
     // ------------------------------------------------------------- prompting
@@ -690,6 +745,34 @@ class CockpitViewModel @Inject constructor(
     /** Save a remote attachment into the phone's Downloads. */
     fun saveAttachment(att: ChatAttachment) {
         viewModelScope.launch { _attachmentSaves.emit(att) }
+    }
+
+    /**
+     * Save a remote attachment to the phone's Downloads folder.
+     * Called when the user taps Save on an attachment card, or when a MEDIA:
+     * marker triggers an auto-download.
+     */
+    fun saveAttachmentToPhone(att: ChatAttachment) {
+        val remote = att.remotePath ?: return
+        if (att.downloading || att.downloadedToPhone) return
+        viewModelScope.launch {
+            engine?.replaceAttachment(att.copy(downloading = true))
+            runCatching { transferRepository.saveToPhone(remote) { _, _, _ -> } }
+                .onSuccess { saved ->
+                    engine?.replaceAttachment(
+                        att.copy(downloading = false, error = null, downloadedToPhone = true),
+                    )
+                    _userMessage.emit("Saved ${saved.name} to Downloads")
+                }
+                .onFailure {
+                    engine?.replaceAttachment(
+                        att.copy(
+                            downloading = false,
+                            error = it.message?.take(140) ?: "couldn't save this file",
+                        ),
+                    )
+                }
+        }
     }
 
     private val _attachmentOpens =

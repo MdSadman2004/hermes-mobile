@@ -63,7 +63,7 @@ object AttachmentRefs {
             .trim()
 
     /** Turn a PC-side path into a renderable attachment, keyed stably by [keyPrefix]. */
-    fun toAttachment(path: String, keyPrefix: String, index: Int): ChatAttachment {
+    fun toAttachment(path: String, keyPrefix: String, index: Int, autoDownload: Boolean = false): ChatAttachment {
         val name = path.replace('\\', '/').substringAfterLast('/').ifBlank { path }
         return ChatAttachment(
             id = "$keyPrefix-ref-$index",
@@ -71,11 +71,20 @@ object AttachmentRefs {
             mimeType = mimeForName(name),
             sizeBytes = 0L,
             remotePath = path,
+            autoDownload = autoDownload,
         )
     }
 
-    /** Convenience: every reference in [text] as attachments. */
+    /** Convenience: every reference in [text] as attachments. MEDIA: markers are auto-downloadable. */
     fun attachmentsIn(text: String, keyPrefix: String): List<ChatAttachment> =
-        scan(text).mapIndexed { i, ref -> toAttachment(ref.path, keyPrefix, i) }
+        REF.findAll(text).mapNotNull { m ->
+            val raw = (3..6).firstNotNullOfOrNull { m.groupValues[it].takeIf(String::isNotBlank) }
+                ?: return@mapNotNull null
+            // Trailing sentence punctuation is not part of a bare path.
+            val path = raw.trimEnd('.', ',', ';', ':', ')', ']', '"', '\'')
+            if (path.isBlank()) return@mapNotNull null
+            toAttachment(path, keyPrefix, m.range.first, autoDownload = m.groupValues[2].isNotBlank())
+        }
             .distinctBy { it.remotePath }
+            .toList()
 }

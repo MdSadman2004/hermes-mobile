@@ -22,6 +22,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,8 +39,11 @@ import com.hermes.mobile.core.connection.ConnectionProfile
 import com.hermes.mobile.ui.components.ConnectionPill
 import com.hermes.mobile.ui.components.MetaChip
 import com.hermes.mobile.ui.components.NavRow
+import com.hermes.mobile.ui.components.PulseDot
 import com.hermes.mobile.ui.components.SectionLabel
 import com.hermes.mobile.ui.theme.HermesMono
+import com.hermes.mobile.ui.theme.hermes
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -56,7 +60,17 @@ fun ConnectionPanel(vm: HomeViewModel = hiltViewModel()) {
     val conn by vm.connState.collectAsState()
     val channel by vm.channelState.collectAsState()
     val profiles by vm.profiles.collectAsState()
+    val systemStates by vm.systemStates.collectAsState()
     var pendingForget by remember { mutableStateOf<ConnectionProfile?>(null) }
+
+    // Badge each system online/offline while this panel is on screen — it is
+    // the one place that answers "which of my machines can I reach right now".
+    LaunchedEffect(Unit) {
+        while (true) {
+            vm.refreshSystemStates()
+            delay(10_000)
+        }
+    }
 
     Column(
         Modifier
@@ -89,7 +103,7 @@ fun ConnectionPanel(vm: HomeViewModel = hiltViewModel()) {
             }
         }
 
-        SectionLabel("Paired PCs")
+        SectionLabel("Systems")
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             profiles.forEach { profile ->
                 val active = (conn as? ConnState.Connected)?.profile?.id == profile.id
@@ -98,13 +112,21 @@ fun ConnectionPanel(vm: HomeViewModel = hiltViewModel()) {
                     subtitle = profile.displayAddress +
                         (profile.lastSeenAt?.let { " · seen ${formatSeen(it)}" } ?: ""),
                     icon = Icons.Outlined.Computer,
-                    trailing = { if (active) MetaChip("current") },
+                    trailing = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            if (active) MetaChip("current")
+                            SystemStatus(systemStates[profile.id])
+                        }
+                    },
                     onClick = if (active) null else ({ vm.switchTo(profile) }),
                 )
             }
             if (profiles.isEmpty()) {
                 Text(
-                    "No PCs paired.",
+                    "No systems paired.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -152,6 +174,32 @@ fun ConnectionPanel(vm: HomeViewModel = hiltViewModel()) {
             dismissButton = {
                 TextButton(onClick = { pendingForget = null }) { Text("Cancel") }
             },
+        )
+    }
+}
+
+/**
+ * Reachability of one paired system, from a live probe. The state is spelled
+ * out, not just dotted — colour alone is not a status.
+ */
+@Composable
+private fun SystemStatus(online: Boolean?) {
+    val dot = when (online) {
+        true -> MaterialTheme.hermes.online
+        false -> MaterialTheme.hermes.offline
+        null -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        PulseDot(color = dot, animating = false, size = 7)
+        Spacer(Modifier.width(5.dp))
+        Text(
+            when (online) {
+                true -> "online"
+                false -> "offline"
+                null -> "…"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

@@ -251,7 +251,8 @@ class ConnectionManager @Inject constructor(
             return
         }
         _state.value = ConnState.Probing
-        val winner = raceProfiles(profiles)
+        // The most recently used system wins when several are up.
+        val winner = raceProfiles(profiles.sortedByDescending { it.lastSeenAt ?: 0L })
         if (winner != null) {
             connectTo(winner)
             return
@@ -262,12 +263,27 @@ class ConnectionManager @Inject constructor(
             _state.value = ConnState.Failed(
                 profiles.firstOrNull(),
                 if (networkMonitor.onLocalNetwork) {
-                    "No Hermes found on this Wi-Fi. Is the dashboard running on your PC?"
+                    "None of your systems answered — " +
+                        profiles.joinToString(", ") { it.label } +
+                        ". Is a dashboard running?"
                 } else {
-                    "Not on Wi-Fi. Hermes Remote reaches your PC over your home network."
+                    "Can't reach " + profiles.joinToString(", ") { it.label } +
+                        " from this network."
                 },
             )
         }
+    }
+
+    /**
+     * Live reachability for every paired system — what the Home screen's
+     * status list renders. `/api/status` is a public path, so one cookie-less
+     * probe client can check them all: no credentials, no sockets, no state.
+     */
+    suspend fun probeAll(): Map<String, Boolean> = coroutineScope {
+        vault.profiles.value
+            .map { profile -> async { profile.id to probeProfile(profile) } }
+            .awaitAll()
+            .toMap()
     }
 
     /** First profile whose /api/status answers within the probe timeout wins. */
