@@ -65,7 +65,11 @@ fun ActivityStrip(
         val current = activity ?: return@AnimatedVisibility
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(14.dp),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+            ),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 4.dp)
@@ -75,13 +79,16 @@ fun ActivityStrip(
                     contentDescription = "Hermes is ${current.phase}. Tap to see the activity log."
                 },
         ) {
+            Column {
             Row(
                 Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (current.running) {
-                    BreathingDots(dot = 6.dp)
-                    Spacer(Modifier.width(12.dp))
+                    // The orb, not a spinner: it is the same mark the live-turn
+                    // bar uses, so "the PC is working" has one face everywhere.
+                    ThinkingOrb(size = 16.dp)
+                    Spacer(Modifier.width(10.dp))
                 }
                 // Crossfade the phrase: a silent text swap reads as a frozen
                 // UI, and this is the only motion proving work is happening.
@@ -124,6 +131,12 @@ fun ActivityStrip(
                     Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            // While the turn runs, the strip carries the same travelling accent
+            // line as the live-turn bar: the two surfaces are one idea at two
+            // sizes, and the line is what makes "still working" obvious from
+            // across the room.
+            if (current.running) IndeterminateAccentBar()
             }
         }
     }

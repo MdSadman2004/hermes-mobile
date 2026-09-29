@@ -27,6 +27,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlin.math.roundToInt
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -226,7 +234,13 @@ class ConnectionManager @Inject constructor(
      */
     private suspend fun rediscoverAndRebind(profile: ConnectionProfile): Boolean {
         if (!networkMonitor.onLocalNetwork) return false
-        val found = scanLan(profile.port)
+        // Never steal another paired system's address: a sweep that finds
+        // foundry's dashboard on the LAN must not rebind the PC profile onto it.
+        val found = scanLan(profile.port).filter { pc ->
+            vault.profiles.value.none { other ->
+                other.id != profile.id && other.host == pc.host && other.port == pc.port
+            }
+        }
         return when {
             found.isEmpty() -> false
             found.size == 1 -> {
@@ -275,16 +289,128 @@ class ConnectionManager @Inject constructor(
     }
 
     /**
-     * Live reachability for every paired system — what the Home screen's
-     * status list renders. `/api/status` is a public path, so one cookie-less
-     * probe client can check them all: no credentials, no sockets, no state.
+     * Live resource view of every paired system — what the Systems cards
+     * render. Two layers per system:
+     *
+     *  1. `GET /api/status` (public): reachability, version, gateway state and
+     *     the memory/disk block — enough for a complete card, no credentials.
+     *  2. `GET /api/system/stats` (authenticated): the real detail — CPU %,
+     *     memory %, disk %, uptime. Rides one cached auxiliary connection per
+     *     profile so the gated cookie session is reused instead of re-logging
+     *     in on every refresh.
      */
-    suspend fun probeAll(): Map<String, Boolean> = coroutineScope {
+    data class SystemView(
+        val id: String,
+        val label: String,
+        val address: String,
+        val online: Boolean,
+        val isCurrent: Boolean = false,
+        val version: String? = null,
+        val gatewayState: String? = null,
+        val overall: String? = null,
+        val activeSessions: Int = 0,
+        val cpuPercent: Int? = null,
+        val memPercent: Int? = null,
+        val diskPercent: Int? = null,
+        val uptimeSeconds: Long? = null,
+    )
+
+    private val auxConnections = mutableMapOf<String, HermesConnection>()
+    private val auxLock = Mutex()
+
+    suspend fun systemViews(): List<SystemView> = coroutineScope {
+        val currentId = activeProfile?.id
         vault.profiles.value
-            .map { profile -> async { profile.id to probeProfile(profile) } }
+            .map { profile -> async { viewFor(profile, profile.id == currentId) } }
             .awaitAll()
-            .toMap()
     }
+
+    private suspend fun viewFor(profile: ConnectionProfile, isCurrent: Boolean): SystemView {
+        val status = runCatching {
+            clientFactory.newProbeClient(managerScope).rest.getJson(profile.httpBase, "/api/status")
+        }.getOrNull()?.let { it as? JsonObject }
+        if (status == null) {
+            return SystemView(
+                id = profile.id, label = profile.label, address = profile.displayAddress,
+                online = false, isCurrent = isCurrent,
+            )
+        }
+        val detail = runCatching { fetchSystemStats(profile) }.getOrNull()
+        val mem = status.objAt("memory")
+        val disk = status.objAt("disk")
+        val dMem = detail.objAt("memory")
+        val dDisk = detail.objAt("disk")
+        return SystemView(
+            id = profile.id,
+            label = profile.label,
+            address = profile.displayAddress,
+            online = true,
+            isCurrent = isCurrent,
+            version = status.stringAt("version"),
+            gatewayState = status.stringAt("gateway_state"),
+            overall = status.stringAt("overall"),
+            activeSessions = status.intAt("active_sessions") ?: 0,
+            cpuPercent = detail.firstDoubleAt("cpu_percent", "cpu")?.roundToInt(),
+            memPercent = dMem.doubleAt("percent")?.roundToInt()
+                ?: usedPercent(mem.doubleAt("system_total_mb"), mem.doubleAt("system_available_mb")),
+            diskPercent = dDisk.doubleAt("percent")?.roundToInt()
+                ?: disk?.doubleAt("used_percent")?.roundToInt(),
+            uptimeSeconds = detail.doubleAt("uptime_seconds")?.toLong(),
+        )
+    }
+
+    private fun usedPercent(total: Double?, available: Double?): Int? {
+        if (total == null || total <= 0.0 || available == null) return null
+        return (((total - available) / total) * 100).roundToInt()
+    }
+
+    /**
+     * Authenticated `/api/system/stats` for one profile on a cached auxiliary
+     * connection. On failure the cache entry is dropped so the next call
+     * re-logs-in from scratch (stale-cookie self-heal).
+     */
+    private suspend fun fetchSystemStats(profile: ConnectionProfile): JsonObject {
+        val secret = vault.secretFor(profile.id) ?: error("no credential for ${profile.label}")
+        val conn = auxLock.withLock {
+            auxConnections.getOrPut(profile.id) { clientFactory.newConnection(managerScope) }
+        }
+        try {
+            val creds = splitBasicSecret(secret)
+            val strategy = if (creds == null) {
+                CredentialStrategy.Token(secret)
+            } else {
+                CredentialStrategy.Gated(
+                    httpBase = profile.httpBase,
+                    username = creds.first,
+                    password = creds.second,
+                    rest = conn.client.rest,
+                    cookies = conn.cookies,
+                    host = profile.host,
+                )
+            }
+            strategy.ensureAuthenticated()
+            return withTimeoutOrNull(5_000) {
+                conn.client.rest.getJson(profile.httpBase, "/api/system/stats")
+            } as? JsonObject ?: error("stats timed out")
+        } catch (e: Exception) {
+            auxLock.withLock { auxConnections.remove(profile.id) }
+            throw e
+        }
+    }
+
+    private fun JsonObject?.objAt(key: String): JsonObject? = (this?.get(key)) as? JsonObject
+
+    private fun JsonObject.stringAt(key: String): String? =
+        (this[key] as? JsonPrimitive)?.contentOrNull
+
+    private fun JsonObject?.doubleAt(key: String): Double? =
+        (this?.get(key) as? JsonPrimitive)?.doubleOrNull
+
+    private fun JsonObject?.intAt(key: String): Int? =
+        (this?.get(key) as? JsonPrimitive)?.intOrNull
+
+    private fun JsonObject?.firstDoubleAt(vararg keys: String): Double? =
+        keys.firstNotNullOfOrNull { doubleAt(it) }
 
     /** First profile whose /api/status answers within the probe timeout wins. */
     suspend fun raceProfiles(profiles: List<ConnectionProfile>): ConnectionProfile? =
@@ -487,11 +613,31 @@ class ConnectionManager @Inject constructor(
 
                 // Address is not answering. After a few failed attempts assume
                 // the lease moved rather than retrying a dead IP forever.
-                if (attempt >= SWEEP_AFTER_ATTEMPTS && sweeps < MAX_SWEEPS) {
-                    sweeps++
-                    if (rediscoverAndRebind(target)) {
-                        reconnecting = false
-                        return@launch
+                if (attempt >= SWEEP_AFTER_ATTEMPTS) {
+                    if (sweeps < MAX_SWEEPS) {
+                        sweeps++
+                        if (rediscoverAndRebind(target)) {
+                            reconnecting = false
+                            return@launch
+                        }
+                    }
+                    // Still nothing on this machine: fail over to another
+                    // paired system — the point of pairing more than one is
+                    // that losing a machine doesn't lose the phone. "If not
+                    // one, then the other."
+                    val alt = raceProfiles(
+                        vault.profiles.value.filter { it.id != target.id },
+                    )
+                    if (alt != null) {
+                        _notices.tryEmit("${target.label} unreachable — switched to ${alt.label}")
+                        connectLock.withLock { connectLocked(alt) }
+                        if (_state.value is ConnState.Connected ||
+                            _state.value is ConnState.Connecting
+                        ) {
+                            reconnecting = false
+                            return@launch
+                        }
+                        continue
                     }
                 }
             }

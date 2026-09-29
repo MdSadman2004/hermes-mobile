@@ -58,6 +58,15 @@ fun AppFont.family(): FontFamily = when (this) {
     AppFont.SYSTEM -> FontFamily.Default
 }
 
+/**
+ * The display voice — fixed, and deliberately NOT user-selectable.
+ *
+ * Fraunces is a warm editorial serif; it carries the display/headline roles
+ * and the app's welcome moments. Body and controls stay in the chosen sans,
+ * so the picker keeps controlling what the user actually reads long-form.
+ */
+val HermesDisplay: FontFamily = variable(R.font.fraunces_variable)
+
 /** The mono family is fixed — alignment is semantic in code and terminal output. */
 val HermesMonoFamily: FontFamily = variable(R.font.jetbrains_mono_variable)
 

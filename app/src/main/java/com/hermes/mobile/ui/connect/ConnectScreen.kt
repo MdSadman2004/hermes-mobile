@@ -6,7 +6,17 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -62,6 +73,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
@@ -74,8 +86,13 @@ import com.google.mlkit.vision.common.InputImage
 import com.hermes.mobile.core.connection.ConnState
 import com.hermes.mobile.core.net.DiscoveredPc
 import com.hermes.mobile.core.net.LinkKind
+import com.hermes.mobile.ui.components.IndeterminateAccentBar
 import com.hermes.mobile.ui.components.NavRow
+import com.hermes.mobile.ui.components.PhaseTicker
+import com.hermes.mobile.ui.components.RadarSweep
+import com.hermes.mobile.ui.components.ThinkingOrb
 import com.hermes.mobile.ui.theme.HermesMono
+import com.hermes.mobile.ui.theme.revealOnEnter
 import java.util.concurrent.Executors
 
 /**
@@ -117,8 +134,23 @@ fun ConnectScreen(vm: ConnectViewModel = hiltViewModel()) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Spacer(Modifier.height(32.dp))
-        Text("Hermes", style = MaterialTheme.typography.displaySmall)
+        Spacer(Modifier.height(36.dp))
+        // The hero: the mark settles, the title follows, then the promise.
+        // A first screen that assembles itself reads as an app that is ready
+        // for you; one that is simply there reads as a static form.
+        Box(Modifier.revealOnEnter(0)) { ThinkingOrb(size = 54.dp) }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Hermes",
+            style = MaterialTheme.typography.displayMedium,
+            modifier = Modifier.revealOnEnter(1),
+        )
+        Text(
+            "Your PC, in your pocket.",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.revealOnEnter(2),
+        )
         Text(
             when (mode) {
                 PairMode.DISCOVER -> "Your PC and phone need to be on the same Wi-Fi."
@@ -127,6 +159,8 @@ fun ConnectScreen(vm: ConnectViewModel = hiltViewModel()) {
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.revealOnEnter(3),
         )
 
         StateBanner(state, onRetry = vm::retry, onForget = vm::forgetCurrentProfile)
@@ -222,9 +256,23 @@ fun ConnectScreen(vm: ConnectViewModel = hiltViewModel()) {
 private fun StateBanner(state: ConnState, onRetry: () -> Unit, onForget: () -> Unit) {
     AnimatedVisibility(state !is ConnState.NoProfile) {
         when (state) {
-            is ConnState.Connecting -> Working("Connecting to ${state.profile.label}…")
-            is ConnState.Probing -> Working("Looking for your PC…")
-            is ConnState.Reconnecting -> Working("Reconnecting — attempt ${state.attempt}")
+            is ConnState.Connecting -> Working(
+                phases = listOf(
+                    "Reaching ${state.profile.label}…",
+                    "Signing in…",
+                    "Opening the socket…",
+                ),
+                detail = state.profile.displayAddress,
+            )
+            is ConnState.Probing -> Working(
+                phases = listOf("Looking for your PC…", "Sweeping your Wi-Fi…"),
+            )
+            is ConnState.Reconnecting -> Working(
+                phases = listOf(
+                    "Reconnecting — attempt ${state.attempt}",
+                    "Holding the link open…",
+                ),
+            )
             is ConnState.Failed -> Surface(
                 color = MaterialTheme.colorScheme.errorContainer,
                 contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -260,20 +308,44 @@ private fun StateBanner(state: ConnState, onRetry: () -> Unit, onForget: () -> U
     }
 }
 
+/**
+ * A wait that looks alive: the orb keeps working, the label names the real
+ * phase and advances through them, and an accent line travels underneath.
+ * All three are honest — nothing here claims a percentage it cannot know.
+ */
 @Composable
-private fun Working(text: String) {
+private fun Working(phases: List<String>, detail: String? = null) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(18.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        ),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(
-            Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.width(14.dp))
-            Text(text, style = MaterialTheme.typography.bodyMedium)
+        Column {
+            Row(
+                Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ThinkingOrb(size = 30.dp)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    PhaseTicker(
+                        phases = phases,
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    detail?.takeIf { it.isNotBlank() }?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = HermesMono,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            IndeterminateAccentBar()
         }
     }
 }
@@ -397,15 +469,32 @@ private fun CameraPreviewBox(onPayload: (String) -> Unit) {
 /**
  * Four corner marks rather than a full rectangle: it says where to hold the
  * code without covering the part of the frame the scanner needs to read.
+ *
+ * Two things move: the arms breathe in and out so the reticle reads as armed
+ * rather than printed, and a scanning line travels top-to-bottom inside the
+ * frame so the wait for a lock has a direction. Both are slow — a busy
+ * reticle is harder to aim with, not easier.
  */
 @Composable
 private fun Reticle(modifier: Modifier) {
     val tint = MaterialTheme.colorScheme.primary
+    val t = rememberInfiniteTransition(label = "reticle")
+    val scan by t.animateFloat(
+        0f, 1f,
+        infiniteRepeatable(tween(2600, easing = LinearEasing)),
+        label = "scan-line",
+    )
+    val settle by t.animateFloat(
+        0.75f, 1f,
+        infiniteRepeatable(tween(1500, easing = androidx.compose.animation.core.FastOutSlowInEasing), RepeatMode.Reverse),
+        label = "settle",
+    )
     Canvas(modifier) {
         val arm = size.minDimension * 0.22f
         val stroke = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
         val w = size.width
         val h = size.height
+        val lit = tint.copy(alpha = 0.45f + 0.55f * settle)
         listOf(
             // (origin, horizontal arm end, vertical arm end) per corner
             Triple(Offset(0f, 0f), Offset(arm, 0f), Offset(0f, arm)),
@@ -413,9 +502,24 @@ private fun Reticle(modifier: Modifier) {
             Triple(Offset(0f, h), Offset(arm, h), Offset(0f, h - arm)),
             Triple(Offset(w, h), Offset(w - arm, h), Offset(w, h - arm)),
         ).forEach { (corner, horizontal, vertical) ->
-            drawLine(tint, corner, horizontal, strokeWidth = stroke.width, cap = stroke.cap)
-            drawLine(tint, corner, vertical, strokeWidth = stroke.width, cap = stroke.cap)
+            drawLine(lit, corner, horizontal, strokeWidth = stroke.width, cap = stroke.cap)
+            drawLine(lit, corner, vertical, strokeWidth = stroke.width, cap = stroke.cap)
         }
+        // The scan line: a soft warm band travelling down the frame.
+        val y = h * scan
+        drawRect(
+            brush = Brush.verticalGradient(
+                listOf(
+                    Color.Transparent,
+                    tint.copy(alpha = 0.28f),
+                    Color.Transparent,
+                ),
+                startY = y - h * 0.10f,
+                endY = y + h * 0.10f,
+            ),
+            topLeft = Offset(0f, (y - h * 0.10f).coerceAtLeast(0f)),
+            size = androidx.compose.ui.geometry.Size(w, h * 0.20f),
+        )
     }
 }
 
@@ -543,28 +647,45 @@ private fun DiscoveryPane(
                     tint = MaterialTheme.colorScheme.primary,
                 )
                 Spacer(Modifier.width(10.dp))
-                Text("On this Wi-Fi", style = MaterialTheme.typography.titleSmall)
+                Text("On this Wi-Fi", style = MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.weight(1f))
-                if (scanning) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                if (found.isNotEmpty()) {
+                    Text(
+                        "${found.size} found",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
             if (found.isEmpty()) {
-                Text(
-                    if (scanning) "Looking for your PC..."
-                    else "No Hermes found yet. Start the dashboard on your PC, then scan.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                found.forEach { pc ->
-                    NavRow(
-                        title = pc.label.ifBlank { "Hermes" },
-                        subtitle = pc.host + ":" + pc.port +
-                            (if (pc.status.authRequired) " - needs login" else ""),
-                        onClick = { onPick(pc) },
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    // The one wait in the app that is genuinely a *search*, so
+                    // it gets the one spatial metaphor: a radar. It freezes
+                    // when nothing is sweeping, so it never lies about work.
+                    RadarSweep(active = scanning)
+                    Text(
+                        if (scanning) "Sweeping your Wi-Fi…"
+                        else "No Hermes found yet. Start the dashboard on your PC, then scan.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
+                }
+            } else {
+                found.forEachIndexed { i, pc ->
+                    Box(Modifier.revealOnEnter(i)) {
+                        NavRow(
+                            title = pc.label.ifBlank { "Hermes" },
+                            subtitle = pc.host + ":" + pc.port +
+                                (if (pc.status.authRequired) " - needs login" else ""),
+                            onClick = { onPick(pc) },
+                        )
+                    }
                     Spacer(Modifier.height(4.dp))
                 }
             }
@@ -598,5 +719,70 @@ private fun OfflineHint(link: LinkKind) {
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(14.dp),
         )
+    }
+}
+
+/**
+ * Pair ANOTHER system while one is already connected.
+ *
+ * The full pairing screen only renders pre-connection, so adding foundry next
+ * to the PC used to mean unpairing first and losing the other credential.
+ * This dialog hosts the same scanner / manual panes against the same
+ * ConnectViewModel; it closes as soon as the new profile is in the vault.
+ */
+@Composable
+fun AddSystemDialog(
+    onDismiss: () -> Unit,
+    vm: ConnectViewModel = hiltViewModel(),
+) {
+    val profiles by vm.profiles.collectAsState()
+    val state by vm.connState.collectAsState()
+    val initialCount = remember { profiles.size }
+    var manual by remember { mutableStateOf(false) }
+
+    LaunchedEffect(profiles.size) {
+        if (profiles.size > initialCount) onDismiss()
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Pair another system", style = MaterialTheme.typography.titleMedium)
+                (state as? ConnState.Failed)?.let { failed ->
+                    Text(
+                        failed.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (manual) {
+                    ManualEntryPane(
+                        initialHost = "",
+                        initialPort = "9119",
+                        onSubmit = vm::onManualSubmit,
+                    )
+                } else {
+                    QrScannerPane(onPayload = vm::onQrScanned)
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { manual = !manual }) {
+                        Text(if (manual) "Scan QR instead" else "Type details instead")
+                    }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onDismiss) { Text("Close") }
+                }
+            }
+        }
     }
 }

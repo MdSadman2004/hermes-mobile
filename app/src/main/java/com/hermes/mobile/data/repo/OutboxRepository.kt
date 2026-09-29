@@ -53,23 +53,55 @@ class OutboxRepository @Inject constructor(
         if (pending.isEmpty()) return
         val client = connectionManager.clientFlow.value ?: return
         var sent = 0
+        var retargeted = 0
         for (item in pending) {
-            try {
-                val sid = item.sessionId.ifBlank {
-                    val result = client.sessionCreate()
-                    result?.jsonObjectString("session_id")
-                        ?: error("session.create returned no id during outbox flush")
-                }
+            val firstTry = runCatching {
+                val sid = item.sessionId.ifBlank { createSession(client) }
                 client.promptSubmit(sid, item.text)
+            }
+            if (firstTry.isSuccess) {
                 outboxDao.delete(item.rowId) // exactly-once: delete only after success
                 sent++
-            } catch (e: Exception) {
-                _notices.tryEmit("Outbox flush paused: ${e.message}")
-                return // keep order — later items wait for the next reconnect
+                continue
+            }
+            val problem = firstTry.exceptionOrNull()
+            val sessionGone = problem?.message.orEmpty().let { m ->
+                m.contains("4001") || m.contains("session not found", ignoreCase = true)
+            }
+            if (!sessionGone) {
+                _notices.tryEmit("Outbox flush paused: ${problem?.message}")
+                return // transient — keep for the next reconnect, keep order
+            }
+            // The target session does not exist on the system we are talking
+            // to (it lived on the other paired machine, or was replaced).
+            // Deliver to a fresh session HERE instead of erroring on every
+            // reconnect forever — the user typed the prompt and expects it
+            // sent somewhere reachable.
+            val retry = runCatching {
+                val sid = createSession(client)
+                client.promptSubmit(sid, item.text)
+            }
+            if (retry.isSuccess) {
+                outboxDao.delete(item.rowId)
+                sent++
+                retargeted++
+            } else {
+                _notices.tryEmit("Outbox flush paused: ${retry.exceptionOrNull()?.message}")
+                return
             }
         }
         if (sent > 0) _notices.tryEmit("Sent $sent queued prompt${if (sent > 1) "s" else ""}")
+        if (retargeted > 0) {
+            _notices.tryEmit(
+                "$retargeted queued prompt${if (retargeted > 1) "s" else ""} delivered to a new " +
+                    "session on ${connectionManager.currentProfile?.label ?: "this system"}",
+            )
+        }
     }
+
+    private suspend fun createSession(client: com.hermes.mobile.core.transport.HermesClient): String =
+        client.sessionCreate()?.jsonObjectString("session_id")
+            ?: error("session.create returned no id during outbox flush")
 }
 
 private fun kotlinx.serialization.json.JsonElement.jsonObjectString(key: String): String? =

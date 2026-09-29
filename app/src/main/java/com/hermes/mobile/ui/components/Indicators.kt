@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -99,6 +100,9 @@ fun PulseDot(color: Color, animating: Boolean, size: Int = 8) {
 /**
  * A small keyed fact — model name, context fill, token count. Reads as data,
  * not as a button, so it is deliberately not a Material chip.
+ *
+ * Hairline border rather than a filled slab, so a row of four chips stays
+ * quiet under a title instead of turning the app bar into a colour bar.
  */
 @Composable
 fun MetaChip(
@@ -109,11 +113,15 @@ fun MetaChip(
 ) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(6.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(7.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.75f),
+        border = BorderStroke(
+            1.dp,
+            (tone ?: MaterialTheme.colorScheme.outlineVariant).copy(alpha = 0.45f),
+        ),
     ) {
         Row(
-            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {

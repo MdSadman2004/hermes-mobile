@@ -42,6 +42,11 @@ class OpsViewModel @Inject constructor(
     private val _stats = MutableStateFlow<SystemStats?>(null)
     val stats: StateFlow<SystemStats?> = _stats.asStateFlow()
 
+    private val _systems = MutableStateFlow<List<ConnectionManager.SystemView>>(emptyList())
+
+    /** Every paired system with its live resources — the Ops systems list. */
+    val systems: StateFlow<List<ConnectionManager.SystemView>> = _systems.asStateFlow()
+
     private val _models = MutableStateFlow<ModelCatalog?>(null)
     val models: StateFlow<ModelCatalog?> = _models.asStateFlow()
 
@@ -75,8 +80,9 @@ class OpsViewModel @Inject constructor(
 
     // ------------------------------------------------------------- overview
 
-    fun refreshOverview() = load("stats") {
-        _stats.value = opsRepository.systemStats()
+    fun refreshOverview() {
+        load("stats") { _stats.value = opsRepository.systemStats() }
+        load(null) { _systems.value = connectionManager.systemViews() }
     }
 
     // -------------------------------------------------------------- models

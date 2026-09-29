@@ -1,16 +1,21 @@
 package com.hermes.mobile.ui.cockpit
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -76,6 +81,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -105,7 +111,10 @@ import com.hermes.mobile.domain.model.TurnPhase
 import com.hermes.mobile.ui.components.CodeBlock
 import com.hermes.mobile.ui.components.EmptyState
 import com.hermes.mobile.ui.components.MarkdownText
+import com.hermes.mobile.ui.components.RunningTurnStrip
+import com.hermes.mobile.ui.components.ThinkingOrb
 import com.hermes.mobile.ui.theme.HermesMono
+import com.hermes.mobile.ui.theme.HermesMotion
 import com.hermes.mobile.ui.theme.hermes
 
 /**
@@ -268,10 +277,15 @@ fun CockpitScreen(
 
             AnimatedVisibility(
                 visible = phase == TurnPhase.RUNNING,
-                enter = expandVertically(tween(180)) + fadeIn(tween(180)),
-                exit = shrinkVertically(tween(140)) + fadeOut(tween(140)),
+                enter = expandVertically(spring(dampingRatio = 0.78f, stiffness = 320f)) +
+                    fadeIn(tween(180)),
+                exit = shrinkVertically(tween(160)) + fadeOut(tween(140)),
             ) {
-                LiveTurnBar(onInterrupt = vm::interrupt, onSteer = vm::steer)
+                LiveTurnBar(
+                    activity = activity,
+                    onInterrupt = vm::interrupt,
+                    onSteer = vm::steer,
+                )
             }
 
             Composer(
@@ -318,12 +332,18 @@ private fun UserBubble(text: String) {
         Surface(
             color = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
+            shape = RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp),
+            // A warm hairline on the clay fill keeps the bubble from looking
+            // like a flat sticker against the ink ground.
+            border = BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+            ),
             modifier = Modifier.widthIn(max = 320.dp),
         ) {
             Text(
                 text,
-                Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                Modifier.padding(horizontal = 15.dp, vertical = 11.dp),
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
@@ -349,8 +369,22 @@ private fun AssistantBlock(
     val clipboard = LocalClipboardManager.current
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            // A small clay dot rather than a word mark: the reply is already
+            // unambiguously the agent's, so the label only needs to say *when*
+            // it is still being written.
+            Box(
+                Modifier
+                    .size(6.dp)
+                    .background(
+                        MaterialTheme.colorScheme.primary.copy(
+                            alpha = if (item.streaming) 1f else 0.55f,
+                        ),
+                        RoundedCornerShape(3.dp),
+                    ),
+            )
+            Spacer(Modifier.width(7.dp))
             Text(
-                "Hermes",
+                if (item.streaming) "Hermes · writing" else "Hermes",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
@@ -401,10 +435,15 @@ private fun AssistantBlock(
 @Composable
 private fun Caret() {
     val blink = rememberInfiniteTransition(label = "caret")
+    // Eased rather than linear: a linear blink reads as a hardware fault,
+    // an eased one reads as a pen pausing between words.
     val alpha by blink.animateFloat(
-        initialValue = 0.15f,
-        targetValue = 0.85f,
-        animationSpec = infiniteRepeatable(tween(520), RepeatMode.Reverse),
+        initialValue = 0.2f,
+        targetValue = 0.95f,
+        animationSpec = infiniteRepeatable(
+            tween(760, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+            RepeatMode.Reverse,
+        ),
         label = "caret-alpha",
     )
     Box(
@@ -413,7 +452,7 @@ private fun Caret() {
             .size(width = 7.dp, height = 14.dp)
             .background(
                 MaterialTheme.colorScheme.primary.copy(alpha = alpha),
-                RoundedCornerShape(1.dp),
+                RoundedCornerShape(2.dp),
             ),
     )
 }
@@ -423,7 +462,11 @@ private fun ThinkingRow(item: TranscriptItem.ThinkingBlock) {
     var expanded by remember { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 40.dp)
@@ -435,12 +478,19 @@ private fun ThinkingRow(item: TranscriptItem.ThinkingBlock) {
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Outlined.Psychology,
-                    contentDescription = null,
-                    Modifier.size(15.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                // While the model is actually reasoning the mark spins; once
+                // it is done the row goes quiet. Motion here is a status, not
+                // decoration — it means "this text is still being written".
+                if (item.live) {
+                    ThinkingOrb(size = 16.dp)
+                } else {
+                    Icon(
+                        Icons.Outlined.Psychology,
+                        contentDescription = null,
+                        Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Spacer(Modifier.width(8.dp))
                 Text(
                     if (item.live) "reasoning…" else "reasoning",
@@ -455,7 +505,12 @@ private fun ThinkingRow(item: TranscriptItem.ThinkingBlock) {
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            AnimatedVisibility(expanded) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(spring(dampingRatio = 0.8f, stiffness = 300f)) +
+                    fadeIn(tween(160)),
+                exit = shrinkVertically(tween(140)) + fadeOut(tween(100)),
+            ) {
                 Text(
                     item.text,
                     style = MaterialTheme.typography.bodySmall,
@@ -636,11 +691,22 @@ private fun ApprovalChoices(
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun LiveTurnBar(onInterrupt: () -> Unit, onSteer: (String) -> Unit) {
+private fun LiveTurnBar(
+    activity: com.hermes.mobile.domain.model.AgentActivity?,
+    onInterrupt: () -> Unit,
+    onSteer: (String) -> Unit,
+) {
     var steerMode by remember { mutableStateOf(false) }
     var steerText by remember { mutableStateOf("") }
 
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         if (steerMode) {
             Row(
                 Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -668,33 +734,49 @@ private fun LiveTurnBar(onInterrupt: () -> Unit, onSteer: (String) -> Unit) {
                 ) { Text("Send") }
             }
         } else {
-            Row(
-                Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(
-                    onClick = onInterrupt,
-                    modifier = Modifier.heightIn(min = 48.dp).semantics {
-                        contentDescription = "Interrupt this turn"
-                    },
+            Column {
+                // The strip is the latency surface: an orb that keeps moving,
+                // the PC's own phase in plain words, and a travelling accent
+                // line. All of it reports real state, none of it fakes a
+                // percentage.
+                RunningTurnStrip(
+                    phases = listOfNotNull(
+                        activity?.phase?.takeIf { it.isNotBlank() },
+                        "Working on it",
+                    ),
+                    detail = activity?.detail
+                        ?: activity?.steps?.takeIf { it > 0 }?.let {
+                            "$it step" + if (it == 1) "" else "s"
+                        },
+                )
+                Row(
+                    Modifier.padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Outlined.Stop, contentDescription = null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Interrupt", color = MaterialTheme.colorScheme.error)
-                }
-                TextButton(
-                    onClick = { steerMode = true },
-                    modifier = Modifier.heightIn(min = 48.dp).semantics {
-                        contentDescription = "Steer this turn"
-                    },
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                        contentDescription = null,
-                        Modifier.size(17.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text("Steer")
+                    TextButton(
+                        onClick = onInterrupt,
+                        modifier = Modifier.heightIn(min = 48.dp).semantics {
+                            contentDescription = "Interrupt this turn"
+                        },
+                    ) {
+                        Icon(Icons.Outlined.Stop, contentDescription = null, Modifier.size(17.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Interrupt", color = MaterialTheme.colorScheme.error)
+                    }
+                    TextButton(
+                        onClick = { steerMode = true },
+                        modifier = Modifier.heightIn(min = 48.dp).semantics {
+                            contentDescription = "Steer this turn"
+                        },
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                            contentDescription = null,
+                            Modifier.size(17.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Steer")
+                    }
                 }
             }
         }
@@ -816,6 +898,27 @@ private fun Composer(
                     )
                 }
                 val canSend = (text.isNotBlank() || pendingAttachments.isNotEmpty()) && !sending
+                // The send button *announces* readiness: it warms to clay,
+                // lifts a touch, and springs back when the draft empties.
+                // A button that looks identical whether or not it will do
+                // anything is the most common dead-feeling UI there is.
+                val sendScale by animateFloatAsState(
+                    targetValue = if (canSend) 1f else 0.94f,
+                    animationSpec = HermesMotion.Snappy,
+                    label = "send-scale",
+                )
+                val sendColor by animateColorAsState(
+                    targetValue = if (canSend) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.surfaceContainerHighest,
+                    animationSpec = tween(240),
+                    label = "send-bg",
+                )
+                val sendContent by animateColorAsState(
+                    targetValue = if (canSend) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    animationSpec = tween(240),
+                    label = "send-fg",
+                )
                 // Long-press sends the task detached: it keeps running on the
                 // PC after the phone locks or the app is swiped away, which is
                 // the whole reason to start long work from a phone. Kept as a
@@ -824,6 +927,10 @@ private fun Composer(
                 Surface(
                     modifier = Modifier
                         .size(48.dp)
+                        .graphicsLayer {
+                            scaleX = sendScale
+                            scaleY = sendScale
+                        }
                         .combinedClickable(
                             enabled = canSend,
                             onClick = {
@@ -844,28 +951,31 @@ private fun Composer(
                             contentDescription =
                                 "Send to Hermes. Long-press to run it detached on your PC."
                         },
-                    color = if (canSend) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.surfaceContainerHighest,
-                    contentColor = if (canSend) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = sendColor,
+                    contentColor = sendContent,
                     shape = RoundedCornerShape(16.dp),
                 ) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     // While attachments stage, the button reports it rather
                     // than looking dead — a multi-megabyte upload is seconds
                     // of silence otherwise, and silence reads as "it ignored me".
-                    if (sending) {
-                        CircularProgressIndicator(
-                            Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        Icon(
-                            Icons.AutoMirrored.Filled.Send,
-                            contentDescription = null,
-                            Modifier.size(20.dp),
-                        )
+                    AnimatedContent(
+                        targetState = sending,
+                        label = "send-icon",
+                    ) { isSending ->
+                        if (isSending) {
+                            CircularProgressIndicator(
+                                Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Send,
+                                contentDescription = null,
+                                Modifier.size(20.dp),
+                            )
+                        }
                     }
                     }
                 }

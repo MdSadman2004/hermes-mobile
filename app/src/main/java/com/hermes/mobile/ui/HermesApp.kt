@@ -1,12 +1,18 @@
 package com.hermes.mobile.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -62,12 +68,19 @@ import com.hermes.mobile.ui.ops.OpsScreen
 import com.hermes.mobile.ui.sessions.SessionsScreen
 import com.hermes.mobile.ui.terminal.TerminalScreen
 import com.hermes.mobile.ui.theme.HermesMobileTheme
+import com.hermes.mobile.ui.theme.hermesScreenIn
+import com.hermes.mobile.ui.theme.hermesScreenOut
 
 /**
- * Four destinations, which is what a Material navigation bar is for and what
- * this product actually has: the live conversation, its history, the raw TUI,
- * and everything about the machine. `NavigationSuiteScaffold` promotes the bar
- * to a rail on a tablet or an unfolded foldable without a second layout.
+ * Five destinations, which is what a Material navigation bar is for and what
+ * this product actually has: the live conversation, the machine's own work,
+ * its history, the raw TUI, and everything about the machine.
+ * `NavigationSuiteScaffold` promotes the bar to a rail on a tablet or an
+ * unfolded foldable without a second layout.
+ *
+ * Switching tabs is a *place change*, so it is animated as one: the incoming
+ * screen fades up with a small drift while the outgoing one settles away.
+ * Without that, tapping "History" reads as the same page with different text.
  */
 private enum class Destination(val label: String, val icon: ImageVector) {
     COCKPIT("Chat", Icons.Outlined.Forum),
@@ -105,6 +118,10 @@ fun HermesApp(
         // Every ViewModel's userMessage channel lands here — errors are visible.
         LaunchedEffect(Unit) { connectVm.userMessage.collect { snackbar.showSnackbar(it) } }
         LaunchedEffect(Unit) { cockpitVm.userMessage.collect { snackbar.showSnackbar(it) } }
+        // Connection notices (failover hops, rebinds) must surface in the
+        // cockpit too — they were only visible on the pairing screen before,
+        // so a silent system hop looked like a glitch.
+        LaunchedEffect(Unit) { vm.notices.collect { snackbar.showSnackbar(it) } }
 
         // Doorbell / notification deep links → open that session.
         LaunchedEffect(Unit) {
@@ -141,97 +158,126 @@ fun HermesApp(
             destination = Destination.COCKPIT.name
         }
 
-        if (conn !is ConnState.Connected) {
-            Scaffold(
-                snackbarHost = { SnackbarHost(snackbar) },
-                containerColor = MaterialTheme.colorScheme.background,
-            ) { padding ->
-                Box(Modifier.fillMaxSize().padding(padding)) {
-                    ConnectScreen(vm = connectVm)
+        // The pairing screen cross-fades into the app proper: the moment the
+        // socket comes up is the app becoming usable, and it should look like
+        // a door opening rather than a screen swap.
+        AnimatedContent(
+            targetState = conn is ConnState.Connected,
+            transitionSpec = { hermesScreenIn() togetherWith hermesScreenOut() },
+            label = "gate",
+        ) { connected ->
+            if (!connected) {
+                Scaffold(
+                    snackbarHost = { SnackbarHost(snackbar) },
+                    containerColor = MaterialTheme.colorScheme.background,
+                ) { padding ->
+                    Box(Modifier.fillMaxSize().padding(padding)) {
+                        ConnectScreen(vm = connectVm)
+                    }
                 }
+                return@AnimatedContent
             }
-            return@HermesMobileTheme
-        }
 
-        NavigationSuiteScaffold(
-            navigationSuiteItems = {
-                Destination.entries.forEach { entry ->
-                    item(
-                        selected = current == entry,
-                        onClick = { destination = entry.name },
-                        icon = {
-                            // A live dot on Activity is the only signal that
-                            // work is happening while the user is on another
-                            // tab. Without it, moving tool calls out of the
-                            // chat would have made background work invisible.
-                            if (entry == Destination.ACTIVITY && liveActivity?.running == true) {
-                                BadgedBox(badge = { Badge() }) {
+            NavigationSuiteScaffold(
+                navigationSuiteItems = {
+                    Destination.entries.forEach { entry ->
+                        item(
+                            selected = current == entry,
+                            onClick = { destination = entry.name },
+                            icon = {
+                                // A live dot on Activity is the only signal that
+                                // work is happening while the user is on another
+                                // tab. Without it, moving tool calls out of the
+                                // chat would have made background work invisible.
+                                // The badge scales in, so a turn *starting*
+                                // catches the eye from another tab.
+                                if (entry == Destination.ACTIVITY && liveActivity?.running == true) {
+                                    BadgedBox(badge = { Badge() }) {
+                                        Icon(entry.icon, contentDescription = null)
+                                    }
+                                } else {
                                     Icon(entry.icon, contentDescription = null)
                                 }
-                            } else {
-                                Icon(entry.icon, contentDescription = null)
-                            }
-                        },
-                        label = { Text(entry.label) },
-                        modifier = Modifier.semantics { contentDescription = "${entry.label} tab" },
-                    )
-                }
-            },
-        ) {
-            Scaffold(
-                topBar = {
-                    CenterAlignedTopAppBar(
-                        title = { CockpitTitle(cockpitVm, current.label) },
-                        navigationIcon = {
-                            if (current == Destination.COCKPIT) {
-                                IconButton(
-                                    onClick = { cockpitVm.createAndOpen() },
-                                    modifier = Modifier.semantics {
-                                        contentDescription = "Start a new session"
-                                    },
-                                ) { Icon(Icons.Outlined.Add, contentDescription = null) }
-                            }
-                        },
-                        actions = {
-                            if (current == Destination.COCKPIT) {
-                                IconButton(
-                                    onClick = {
-                                        cockpitVm.refreshUsage()
-                                        sheetOpen = true
-                                    },
-                                    modifier = Modifier.semantics {
-                                        contentDescription = "Session actions"
-                                    },
-                                ) { Icon(Icons.Outlined.MoreVert, contentDescription = null) }
-                            }
-                        },
-                        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        ),
-                    )
+                            },
+                            label = { Text(entry.label) },
+                            modifier = Modifier.semantics { contentDescription = "${entry.label} tab" },
+                        )
+                    }
                 },
-                snackbarHost = { SnackbarHost(snackbar) },
-                containerColor = MaterialTheme.colorScheme.background,
-            ) { padding ->
-                Box(Modifier.fillMaxSize().padding(padding)) {
-                    when (current) {
-                        Destination.COCKPIT -> CockpitScreen(
-                            vm = cockpitVm,
-                            onOpenActivity = { destination = Destination.ACTIVITY.name },
-                        )
-                        Destination.ACTIVITY -> ActivityScreen(entries = toolLog)
-                        Destination.SESSIONS -> SessionsScreen(
-                            onOpen = { summary ->
-                                cockpitVm.resumeAndOpen(summary.id, summary.title)
-                                destination = Destination.COCKPIT.name
-                            },
-                            onNew = {
-                                cockpitVm.createAndOpen()
-                                destination = Destination.COCKPIT.name
-                            },
-                        )
-                        Destination.TERMINAL -> TerminalScreen()
-                        Destination.OPS -> OpsScreen()
+            ) {
+                Scaffold(
+                    topBar = {
+                        Column {
+                            CenterAlignedTopAppBar(
+                                title = { CockpitTitle(cockpitVm, current) },
+                                navigationIcon = {
+                                    if (current == Destination.COCKPIT) {
+                                        IconButton(
+                                            onClick = { cockpitVm.createAndOpen() },
+                                            modifier = Modifier.semantics {
+                                                contentDescription = "Start a new session"
+                                            },
+                                        ) { Icon(Icons.Outlined.Add, contentDescription = null) }
+                                    }
+                                },
+                                actions = {
+                                    if (current == Destination.COCKPIT) {
+                                        IconButton(
+                                            onClick = {
+                                                cockpitVm.refreshUsage()
+                                                sheetOpen = true
+                                            },
+                                            modifier = Modifier.semantics {
+                                                contentDescription = "Session actions"
+                                            },
+                                        ) { Icon(Icons.Outlined.MoreVert, contentDescription = null) }
+                                    }
+                                },
+                                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                ),
+                            )
+                            // A hairline instead of a shadow: the bars and the
+                            // page are the same material, separated by a line.
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                    ),
+                            )
+                        }
+                    },
+                    snackbarHost = { SnackbarHost(snackbar) },
+                    containerColor = MaterialTheme.colorScheme.background,
+                ) { padding ->
+                    Box(Modifier.fillMaxSize().padding(padding)) {
+                        AnimatedContent(
+                            targetState = current,
+                            transitionSpec = { hermesScreenIn() togetherWith hermesScreenOut() },
+                            label = "tab",
+                        ) { dest ->
+                            when (dest) {
+                                Destination.COCKPIT -> CockpitScreen(
+                                    vm = cockpitVm,
+                                    onOpenActivity = { destination = Destination.ACTIVITY.name },
+                                )
+                                Destination.ACTIVITY -> ActivityScreen(entries = toolLog)
+                                Destination.SESSIONS -> SessionsScreen(
+                                    onOpen = { summary ->
+                                        cockpitVm.resumeAndOpen(summary.id, summary.title)
+                                        destination = Destination.COCKPIT.name
+                                    },
+                                    onNew = {
+                                        cockpitVm.createAndOpen()
+                                        destination = Destination.COCKPIT.name
+                                    },
+                                )
+                                Destination.TERMINAL -> TerminalScreen()
+                                Destination.OPS -> OpsScreen()
+                            }
+                        }
                     }
                 }
             }
@@ -249,14 +295,19 @@ fun HermesApp(
  * other tabs it is just the tab name.
  */
 @Composable
-private fun CockpitTitle(cockpitVm: CockpitViewModel, fallback: String) {
+private fun CockpitTitle(cockpitVm: CockpitViewModel, current: Destination) {
     val conn by cockpitVm.connState.collectAsState()
     val title by cockpitVm.activeTitle.collectAsState()
     val model by cockpitVm.model.collectAsState()
     val contextPercent by cockpitVm.contextPercent.collectAsState()
 
-    if (fallback != "Cockpit") {
-        Text(fallback, style = MaterialTheme.typography.titleMedium)
+    // Compare the destination, not a label string: the tab was renamed to
+    // "Chat" once and this check silently died with it.
+    if (current != Destination.COCKPIT) {
+        Text(
+            current.label,
+            style = MaterialTheme.typography.headlineSmall,
+        )
         return
     }
 

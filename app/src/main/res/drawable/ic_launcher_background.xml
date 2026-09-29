@@ -1,14 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Warm ink behind the white feather, so the launcher icon belongs to the
+         same world as the app instead of reading as a template placeholder. -->
     <item android:state_enabled="false">
         <shape android:shape="rectangle">
-            <solid android:color="@color/white" android:alpha="0.12"/>
+            <solid android:color="@color/hermes_deep" android:alpha="0.55"/>
             <corners android:radius="4dp"/>
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/white"/>
+            <solid android:color="@color/hermes_deep"/>
             <size android:width="108dp" android:height="108dp"/>
         </shape>
     </item>

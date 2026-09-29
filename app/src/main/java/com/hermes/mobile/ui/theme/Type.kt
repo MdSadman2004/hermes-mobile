@@ -9,16 +9,18 @@ import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.sp
 
 /**
- * One family, a tight scale.
+ * Two voices, one page.
  *
- * A control surface has far more type elements than a marketing page, so the
- * ratio between steps stays near 1.15 — exaggerated contrast reads as noise
- * when a screen carries a title, a chip, four labels and a wall of body at
- * once. Sizes are sp throughout, so the system font-size setting still works.
+ * Display and headline roles are set in a warm serif ([HermesDisplay]) — the
+ * editorial voice that gives a screen a title worth reading. Everything that
+ * is *operated* (titles, body, labels, buttons) stays in the user's chosen
+ * sans, because serif UI chrome reads as decoration on a control surface.
  *
- * The previous scale defined seven roles and let the other eleven fall back to
- * Material's defaults, which is why a `titleSmall` heading and a `bodyMedium`
- * paragraph could end up the same size. Every role is spelled out here.
+ * The scale itself stays tight: a control surface has far more type elements
+ * than a marketing page, so the ratio between steps is near 1.15 —
+ * exaggerated contrast reads as noise when a screen carries a title, a chip,
+ * four labels and a wall of body at once. Sizes are sp throughout, so the
+ * system font-size setting still works.
  */
 /** Code, terminal scrollback, command strings, token counts — never chrome. */
 val HermesMono: FontFamily = HermesMonoFamily
@@ -46,23 +48,28 @@ private fun style(
 )
 
 /**
- * The scale, bound to a chosen family.
+ * The scale, bound to the chosen families.
  *
  * Typography used to be a single `val`, which meant the family was fixed at
- * class-init and a user font choice could not reach it. It is a function now so
- * the theme can rebuild the scale when the preference changes.
+ * class-init and a user font choice could not reach it. It is a function now
+ * so the theme can rebuild the scale when the preference changes.
  */
-fun hermesTypography(sans: FontFamily = FontFamily.Default) = Typography(
-    displayLarge = style(44, 52, FontWeight.ExtraBold, -1.0, family = sans),
-    displayMedium = style(34, 42, FontWeight.Bold, -0.6, family = sans),
-    displaySmall = style(28, 36, FontWeight.Bold, -0.4, family = sans),
+fun hermesTypography(
+    sans: FontFamily = FontFamily.Default,
+    display: FontFamily = FontFamily.Serif,
+) = Typography(
+    // The editorial voice: welcome lines, empty states, section heroes.
+    displayLarge = style(42, 49, FontWeight.SemiBold, -0.8, family = display),
+    displayMedium = style(33, 40, FontWeight.SemiBold, -0.5, family = display),
+    displaySmall = style(27, 34, FontWeight.SemiBold, -0.3, family = display),
 
-    headlineLarge = style(26, 34, FontWeight.Bold, -0.4, family = sans),
-    headlineMedium = style(23, 30, FontWeight.SemiBold, -0.3, family = sans),
-    headlineSmall = style(20, 27, FontWeight.SemiBold, -0.2, family = sans),
+    headlineLarge = style(25, 32, FontWeight.SemiBold, -0.3, family = display),
+    headlineMedium = style(22, 29, FontWeight.SemiBold, -0.2, family = display),
+    headlineSmall = style(19, 26, FontWeight.SemiBold, -0.1, family = display),
 
-    titleLarge = style(19, 26, FontWeight.SemiBold, -0.1, family = sans),
-    titleMedium = style(16, 23, FontWeight.SemiBold, family = sans),
+    // The operating voice: everything you tap or scan.
+    titleLarge = style(18, 25, FontWeight.SemiBold, -0.1, family = sans),
+    titleMedium = style(15, 22, FontWeight.SemiBold, family = sans),
     titleSmall = style(14, 20, FontWeight.SemiBold, 0.1, family = sans),
 
     bodyLarge = style(16, 25, family = sans),

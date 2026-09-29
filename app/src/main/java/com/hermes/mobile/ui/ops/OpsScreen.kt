@@ -54,10 +54,14 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.hermes.mobile.core.connection.ConnState
 import com.hermes.mobile.ui.components.Meter
 import com.hermes.mobile.ui.components.NavRow
+import com.hermes.mobile.ui.components.PulseDot
 import com.hermes.mobile.ui.components.SectionLabel
 import com.hermes.mobile.ui.files.FilesScreen
 import com.hermes.mobile.ui.home.ConnectionPanel
 import com.hermes.mobile.ui.theme.HermesMono
+import com.hermes.mobile.ui.theme.hermes
+import com.hermes.mobile.ui.theme.revealOnEnter
+import kotlinx.coroutines.delay
 
 private enum class Pane(val title: String) {
     MENU("Ops"),
@@ -104,7 +108,7 @@ fun OpsScreen(vm: OpsViewModel = hiltViewModel()) {
             ) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = null)
             }
-            Text(current.title, style = MaterialTheme.typography.titleMedium)
+            Text(current.title, style = MaterialTheme.typography.headlineSmall)
         }
         when (current) {
             Pane.FILES -> FilesScreen()
@@ -127,43 +131,127 @@ private fun OpsMenu(vm: OpsViewModel, onOpen: (Pane) -> Unit) {
     val channel by vm.channelState.collectAsState()
     val stats by vm.stats.collectAsState()
     val models by vm.models.collectAsState()
+    val systems by vm.systems.collectAsState()
     var panicArmed by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { vm.refreshOverview() }
+    // Refresh while the menu is on screen: the systems strip is the one part
+    // of Ops that is live data, and a stale "CPU 3%" reads as broken.
+    LaunchedEffect(Unit) {
+        while (true) {
+            vm.refreshOverview()
+            delay(15_000)
+        }
+    }
 
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp)
-            .padding(bottom = 32.dp),
+            // The scaffold already keeps content clear of the navigation bar,
+            // so this is only an end-of-list margin — padding for the bar as
+            // well left a dead band the height of three rows.
+            .padding(bottom = 24.dp),
     ) {
         (conn as? ConnState.Connected)?.let { c ->
-            SectionLabel("Machine")
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(c.profile.label, style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        c.profile.displayAddress,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = HermesMono,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        "Hermes ${c.status?.version ?: "?"} · gateway " +
-                            "${c.status?.gatewayState ?: "unknown"} · socket " +
-                            channel.toString().substringAfterLast('.').lowercase(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    stats?.let { s ->
-                        s.cpuPercent?.let { StatMeter("CPU", it) }
-                        s.memoryPercent?.let { StatMeter("Memory", it) }
-                        s.diskPercent?.let { StatMeter("Disk", it) }
+            Column(Modifier.revealOnEnter(0)) {
+                SectionLabel("Machine")
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(c.profile.label, style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            c.profile.displayAddress,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = HermesMono,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "Hermes ${c.status?.version ?: "?"} · gateway " +
+                                "${c.status?.gatewayState ?: "unknown"} · socket " +
+                                channel.toString().substringAfterLast('.').lowercase(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        stats?.let { s ->
+                            s.cpuPercent?.let { StatMeter("CPU", it) }
+                            s.memoryPercent?.let { StatMeter("Memory", it) }
+                            s.diskPercent?.let { StatMeter("Disk", it) }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (systems.isNotEmpty()) {
+            SectionLabel("Systems")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                systems.forEachIndexed { index, s ->
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (s.isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        ),
+                        modifier = Modifier.fillMaxWidth().revealOnEnter(index + 1),
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            PulseDot(
+                                color = if (s.online) MaterialTheme.hermes.online
+                                else MaterialTheme.hermes.offline,
+                                animating = false,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    s.label + if (s.isCurrent) " · current" else "",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(
+                                    s.address + (s.version?.let { " · v$it" } ?: ""),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = HermesMono,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                // The metrics get their own line. Squeezed into
+                                // a right-hand column they wrapped through the
+                                // address — "…:9119CPU 13%" — which reads as a
+                                // corrupted address rather than as a reading.
+                                if (s.online) {
+                                    Text(
+                                        listOfNotNull(
+                                            s.cpuPercent?.let { "CPU $it%" },
+                                            s.memPercent?.let { "Mem $it%" },
+                                            s.diskPercent?.let { "Disk $it%" },
+                                        ).joinToString(" · ").ifBlank { "online" },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = HermesMono,
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+                                    )
+                                } else {
+                                    Text(
+                                        "offline",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = HermesMono,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

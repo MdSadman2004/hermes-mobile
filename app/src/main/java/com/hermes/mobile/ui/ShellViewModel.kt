@@ -26,6 +26,9 @@ class ShellViewModel @Inject constructor(
     val connState: StateFlow<ConnState> = connectionManager.state
         .stateIn(viewModelScope, SharingStarted.Eagerly, ConnState.Probing)
 
+    /** Connection-manager notices (failover hops, DHCP rebinds, ambiguity). */
+    val notices: SharedFlow<String> = connectionManager.notices
+
     private val _userMessage = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val userMessage: SharedFlow<String> = _userMessage.asSharedFlow()
 

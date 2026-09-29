@@ -22,14 +22,14 @@ class HomeViewModel @Inject constructor(
     val channelState: StateFlow<ChannelState> = connectionManager.channelState
     val profiles: StateFlow<List<ConnectionProfile>> = connectionManager.profiles
 
-    private val _systemStates = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    private val _systemViews = MutableStateFlow<List<ConnectionManager.SystemView>>(emptyList())
 
-    /** profileId -> reachable, refreshed while the Systems list is on screen. */
-    val systemStates: StateFlow<Map<String, Boolean>> = _systemStates.asStateFlow()
+    /** Live per-system resource views, refreshed while the Systems list is on screen. */
+    val systemViews: StateFlow<List<ConnectionManager.SystemView>> = _systemViews.asStateFlow()
 
-    /** Probe every paired system so the list shows who is reachable right now. */
+    /** Probe every paired system so the cards show reachability and usage. */
     suspend fun refreshSystemStates() {
-        _systemStates.value = connectionManager.probeAll()
+        _systemViews.value = connectionManager.systemViews()
     }
 
     /** Bind to another paired PC without unpairing the current one. */

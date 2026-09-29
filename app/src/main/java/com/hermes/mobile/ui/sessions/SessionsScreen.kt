@@ -1,5 +1,6 @@
 package com.hermes.mobile.ui.sessions
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -138,14 +139,19 @@ fun SessionsScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(sessions, key = { it.id }) { session ->
-                        SessionRow(
-                            session = session,
-                            onClick = { onOpen(session) },
-                            onLongClick = {
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                pendingDelete = session
-                            },
-                        )
+                        // Rows animate on arrival and on re-order: the list is
+                        // re-sorted by activity, so a session that jumps to the
+                        // top visibly *moves* rather than teleporting.
+                        Box(Modifier.animateItem()) {
+                            SessionRow(
+                                session = session,
+                                onClick = { onOpen(session) },
+                                onLongClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    pendingDelete = session
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -195,8 +201,12 @@ private fun SessionRow(
     onLongClick: () -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 64.dp)
@@ -206,37 +216,51 @@ private fun SessionRow(
                     "Session ${session.title.ifBlank { "untitled" }}, long press to delete"
             },
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                session.title.ifBlank { "Untitled session" },
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            // A clay spine: the list reads as a shelf of records, and the eye
+            // gets a landing edge without the row needing a heading style.
+            Box(
+                Modifier
+                    .width(3.dp)
+                    .heightIn(min = 34.dp)
+                    .background(
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                        RoundedCornerShape(2.dp),
+                    ),
             )
-            if (session.preview.isNotBlank()) {
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    session.preview,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    session.title.ifBlank { "Untitled session" },
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-            }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    relativeTime(session.startedAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (session.messageCount > 0) {
-                    Spacer(Modifier.width(2.dp))
-                    MetaChip("${session.messageCount} msg")
+                if (session.preview.isNotBlank()) {
+                    Text(
+                        session.preview,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-                if (session.source.isNotBlank()) {
-                    MetaChip(session.source)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        relativeTime(session.startedAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                    )
+                    if (session.messageCount > 0) {
+                        Spacer(Modifier.width(2.dp))
+                        MetaChip("${session.messageCount} msg")
+                    }
+                    if (session.source.isNotBlank()) {
+                        MetaChip(session.source)
+                    }
                 }
             }
         }

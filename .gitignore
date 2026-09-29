@@ -45,3 +45,11 @@ pc/*-qr.png
 
 # foundry chat-sync runtime leftovers
 pc/foundry-sync.log
+
+# PC-side scratch: node deps for the artifact compiler, and device-verification
+# screenshots / UI dumps taken during testing. Neither belongs in history.
+pc/node_modules/
+pc/verify-*.png
+pc/hermes-check.png
+pc/ui.xml
+pc/headless-watchdog-status.json

@@ -40,8 +40,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.domain.model.TranscriptItem
+import com.hermes.mobile.ui.components.BreathingDots
 import com.hermes.mobile.ui.components.CodeBlock
 import com.hermes.mobile.ui.components.EmptyState
+import com.hermes.mobile.ui.components.ThinkingOrb
 import com.hermes.mobile.ui.components.toolIconFor
 import com.hermes.mobile.ui.theme.HermesMono
 import com.hermes.mobile.ui.theme.hermes
@@ -86,7 +88,11 @@ fun ActivityScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         reverseLayout = true,
     ) {
-        items(entries.asReversed(), key = { it.key }) { ActivityRow(it) }
+        items(entries.asReversed(), key = { it.key }) { entry ->
+            // New rows arrive from the bottom as the agent works, so each one
+            // animates in: the log visibly *grows* instead of the list jumping.
+            Box(Modifier.fillMaxWidth().animateItem()) { ActivityRow(entry) }
+        }
     }
 }
 
@@ -98,7 +104,12 @@ private fun ActivityRow(item: TranscriptItem.ToolCallItem) {
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (item.running) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
@@ -107,13 +118,18 @@ private fun ActivityRow(item: TranscriptItem.ToolCallItem) {
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    toolIconFor(item.name),
-                    contentDescription = null,
-                    Modifier.size(15.dp),
-                    tint = if (item.running) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (item.running) {
+                    // The same orb as everywhere else: a running tool is the
+                    // agent working, at the smallest scale it appears.
+                    ThinkingOrb(size = 15.dp)
+                } else {
+                    Icon(
+                        toolIconFor(item.name),
+                        contentDescription = null,
+                        Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Spacer(Modifier.width(9.dp))
                 Text(
                     item.name,
@@ -128,11 +144,7 @@ private fun ActivityRow(item: TranscriptItem.ToolCallItem) {
                 )
                 Spacer(Modifier.weight(1f))
                 if (item.running) {
-                    CircularProgressIndicator(
-                        Modifier.size(13.dp),
-                        strokeWidth = 1.5.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    BreathingDots(dot = 4.dp)
                 } else {
                     Text(
                         item.durationS?.let { formatDuration(it) } ?: "done",

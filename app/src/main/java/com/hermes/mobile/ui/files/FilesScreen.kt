@@ -247,8 +247,13 @@ private fun SendFab(enabled: Boolean, onClick: () -> Unit) {
 @Composable
 private fun EntryRow(entry: RemoteEntry, onClick: () -> Unit, onSave: () -> Unit) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (entry.isDirectory) MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+        ),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)

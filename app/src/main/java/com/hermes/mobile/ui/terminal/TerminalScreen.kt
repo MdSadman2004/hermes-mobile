@@ -1,6 +1,7 @@
 package com.hermes.mobile.ui.terminal
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -111,7 +112,10 @@ fun TerminalScreen(vm: TerminalViewModel = hiltViewModel()) {
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp)
-                .background(semantics.code, RoundedCornerShape(10.dp)),
+                .background(semantics.code, RoundedCornerShape(12.dp))
+                // A hairline around the scrollback: the terminal is a pane of
+                // glass over the ink, not a floating grey box.
+                .border(1.dp, semantics.codeBorder, RoundedCornerShape(12.dp)),
         ) {
             Text(
                 scrollback.ifBlank { "Waiting for the PTY…" },
